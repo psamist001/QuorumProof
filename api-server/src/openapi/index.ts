@@ -26,6 +26,7 @@ import type { PathsFragment } from './paths/types.js';
 import { healthPaths } from './paths/health.js';
 import { verifyPaths } from './paths/verify.js';
 import { slicesPaths } from './paths/slices.js';
+import { sbtPaths } from './paths/sbt.js'; // #1564 SBT reverse index
 import { apiKeysPaths } from './paths/apiKeys.js';
 import { webhooksPaths } from './paths/webhooks.js';
 import { gdprPaths } from './paths/gdpr.js';
@@ -85,6 +86,7 @@ export function buildOpenApiSpec(): OpenAPIObject {
     healthPaths,
     verifyPaths,
     slicesPaths,
+    sbtPaths, // #1564 SBT reverse index
     apiKeysPaths,
     // apiKeysRouter is mounted twice in index.ts: /api/api-keys (legacy)
     // and /auth/api-keys (issue #1297's spec-mandated path). Same handlers,

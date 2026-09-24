@@ -3,8 +3,10 @@ import { createServer } from 'http';
 // #1313: Compression is configured via the dedicated middleware module.
 import { createCompressionFromEnv } from './middleware/compression.js';
 import slicesRouter from './routes/slices.js';
+import sbtRouter from './routes/sbt.js'; // #1564 SBT reverse index
 import credentialsRouter from './routes/credentials.js';
 import credentialExportRouter from './routes/credentialExport.js';
+import costsRouter from './routes/costs.js'; // #1562 gas cost estimation
 import verifyRouter from './routes/verify.js';
 import notificationsRouter from './routes/notifications.js';
 import analyticsRouter from './routes/analytics.js';
@@ -128,6 +130,8 @@ app.use('/api', apiRateLimiter);
 app.use(cacheControl);
 
 app.use('/api/slices', slicesRouter);
+app.use('/api/sbt', sbtRouter); // #1564 SBT reverse index
+app.use('/api/costs', costsRouter); // #1562 gas cost estimation
 app.use('/api/credentials', credentialsRouter);
 app.use('/api/credentials', credentialExportRouter); // #1000 credential export (json/pdf/qrcode)
 app.use('/api/verify', verifyRouter);
