@@ -841,6 +841,19 @@ impl SbtRegistryContract {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Issue #1564: Reverse-index lookup — returns all SBT token IDs held by
+    /// an address.  This is the canonical holder-facing name for the reverse
+    /// index that `OwnerTokens(Address)` stores.  The index is maintained
+    /// automatically by `mint`, `burn_sbt`, `transfer` (always panics for
+    /// soulbound semantics), and `recover_sbt`, so the returned list is
+    /// always authoritative; no separate rebuild is needed on-chain.
+    pub fn get_tokens_by_holder(env: Env, holder: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OwnerTokens(holder))
+            .unwrap_or(Vec::new(&env))
+    }
+
     /// Delegate rights for a specific SBT to another address until a timestamp expires.
     pub fn delegate_sbt_rights(
         env: Env,

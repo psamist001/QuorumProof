@@ -11,7 +11,18 @@ export const credentialsPaths: PathsFragment = {
         'and nested boolean combinations via `filter[and]`/`filter[or]`/`filter[not]`.',
       parameters: [
         { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Full-text search query.' },
-        { name: 'type', in: 'query', schema: { type: 'array', items: { type: 'integer' } }, style: 'form', explode: true, description: 'Credential type; repeatable.' },
+        {
+          name: 'credential_type',
+          in: 'query',
+          schema: { type: 'array', items: { type: 'string' } },
+          style: 'form',
+          explode: true,
+          description:
+            'Filter by credential type name or numeric ID (e.g. `PE`, `1`). ' +
+            'Alias for `type`; validated and normalised by the credential query filter ' +
+            'middleware before reaching the search layer (Issue #1563). Repeatable.',
+        },
+        { name: 'type', in: 'query', schema: { type: 'array', items: { type: 'integer' } }, style: 'form', explode: true, description: 'Credential type (numeric); repeatable. Prefer `credential_type` for new integrations.' },
         { name: 'issuer', in: 'query', schema: { type: 'array', items: { type: 'string' } }, style: 'form', explode: true },
         { name: 'issuer_type', in: 'query', schema: { type: 'array', items: { type: 'string' } }, style: 'form', explode: true },
         { name: 'subject', in: 'query', schema: { type: 'string' } },
@@ -50,7 +61,7 @@ export const credentialsPaths: PathsFragment = {
             },
           },
         },
-        '400': { description: 'Invalid limit, sort_by, or sort_order.', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+        '400': { description: 'Invalid limit, sort_by, sort_order, or filter parameter (e.g. invalid status value — see Issue #1563 filter middleware).', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       },
     },
   },

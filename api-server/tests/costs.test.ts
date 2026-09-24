@@ -1,10 +1,12 @@
 /**
- * Tests for Gas Cost Reporting Routes — Issue #1440 / #4
+ * Tests for Gas Cost Reporting and Estimation Routes — Issue #1440 / #4 / #1562
  *
  * Covers:
  *  - GET /api/costs/report (empty report, aggregated operation statistics, XLM/USD conversion)
  *  - GET /api/costs/optimizations (valid top=N, invalid N fallback, recommendations format)
  *  - GET /api/costs/projection (missing operation 400, invalid callsPerDay 400, 404 for unrecorded operations, happy-path calculations)
+ *  - POST /api/costs/estimate-gas (single op, multi-op, observed vs schedule source, validation, unknown ops — Issue #1562)
+ *  - GET /api/costs/fee-schedule (static schedule listing — Issue #1562)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -200,6 +202,185 @@ describe('Gas Cost Routes (/api/costs)', () => {
       expect(res.status).toBe(200);
       expect(res.body.days).toBe(30);
       expect(res.body.projectedXlm).toBe(15000);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 4. POST /api/costs/estimate-gas  (Issue #1562)
+  // ---------------------------------------------------------------------------
+  describe('POST /api/costs/estimate-gas', () => {
+    it('returns 400 when neither operation nor operations is provided', async () => {
+      const res = await request(app).post('/api/costs/estimate-gas').send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 when operations array is empty', async () => {
+      const res = await request(app).post('/api/costs/estimate-gas').send({ operations: [] });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 when operations array exceeds 20 entries', async () => {
+      const ops = Array.from({ length: 21 }, (_, i) => `issue_credential`);
+      const res = await request(app).post('/api/costs/estimate-gas').send({ operations: ops });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 400 when an operation name contains invalid characters', async () => {
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operation: 'drop table; --' });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 422 when all operations are unknown', async () => {
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operations: ['totally_unknown_op'] });
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain('totally_unknown_op');
+    });
+
+    it('estimates a single known operation using the static fee schedule', async () => {
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operation: 'issue_credential' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.estimates).toHaveLength(1);
+      const est = res.body.estimates[0];
+      expect(est.operation).toBe('issue_credential');
+      expect(est.source).toBe('schedule');
+      expect(est.sample_size).toBe(0);
+      expect(est.confidence).toBe('low');
+      expect(est.resource_fee_stroops).toBeGreaterThan(0);
+      expect(est.inclusion_fee_stroops).toBe(100);
+      expect(est.total_fee_stroops).toBe(est.resource_fee_stroops + 100);
+      expect(est.total_fee_xlm).toBeGreaterThan(0);
+      expect(est.total_fee_usd).toBeGreaterThan(0);
+    });
+
+    it('uses observed average when operations have been recorded', async () => {
+      // Record 60 calls of 20,000 stroops each → avg = 20,000, high confidence
+      for (let i = 0; i < 60; i++) {
+        tracker.record('is_attested', '20000');
+      }
+
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operation: 'is_attested' });
+
+      expect(res.status).toBe(200);
+      const est = res.body.estimates[0];
+      expect(est.source).toBe('observed');
+      expect(est.sample_size).toBe(60);
+      expect(est.resource_fee_stroops).toBe(20000);
+      expect(est.confidence).toBe('high');
+    });
+
+    it('returns medium confidence for 10–49 observed samples', async () => {
+      for (let i = 0; i < 15; i++) {
+        tracker.record('get_slice', '3000');
+      }
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operation: 'get_slice' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.estimates[0].confidence).toBe('medium');
+    });
+
+    it('estimates multiple operations in one request', async () => {
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operations: ['issue_credential', 'attest', 'get_credential'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.estimates).toHaveLength(3);
+      expect(res.body.totals.total_fee_stroops).toBeGreaterThan(0);
+      expect(res.body.totals.total_fee_xlm).toBeGreaterThan(0);
+      expect(res.body.totals.total_fee_usd).toBeGreaterThan(0);
+      expect(res.body.fee_schedule).toBeDefined();
+    });
+
+    it('skips unknown operations but still returns estimates for known ones', async () => {
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operations: ['issue_credential', 'unknown_op_xyz'] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.estimates).toHaveLength(1);
+      expect(res.body.estimates[0].operation).toBe('issue_credential');
+      expect(res.body.warnings).toHaveLength(1);
+      expect(res.body.warnings[0]).toContain('unknown_op_xyz');
+    });
+
+    it('accepts single-string "operation" field as well as "operations" array', async () => {
+      const singleField = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operation: 'attest' });
+      expect(singleField.status).toBe(200);
+      expect(singleField.body.estimates[0].operation).toBe('attest');
+
+      const arrayField = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operations: ['attest'] });
+      expect(arrayField.status).toBe(200);
+      expect(arrayField.body.estimates[0].operation).toBe('attest');
+    });
+
+    it('totals match the sum of individual estimates', async () => {
+      const res = await request(app)
+        .post('/api/costs/estimate-gas')
+        .send({ operations: ['create_slice', 'add_attestor', 'get_slice'] });
+
+      expect(res.status).toBe(200);
+      const sumStroops = res.body.estimates.reduce(
+        (acc: number, e: { total_fee_stroops: number }) => acc + e.total_fee_stroops,
+        0,
+      );
+      expect(res.body.totals.total_fee_stroops).toBe(sumStroops);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 5. GET /api/costs/fee-schedule  (Issue #1562)
+  // ---------------------------------------------------------------------------
+  describe('GET /api/costs/fee-schedule', () => {
+    it('returns a schedule array with all known operations', async () => {
+      const res = await request(app).get('/api/costs/fee-schedule');
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.schedule)).toBe(true);
+      expect(res.body.schedule.length).toBeGreaterThan(0);
+      expect(res.body.xlm_usd_price).toBeDefined();
+      expect(res.body.note).toBeDefined();
+    });
+
+    it('each schedule entry has the required fields', async () => {
+      const res = await request(app).get('/api/costs/fee-schedule');
+
+      expect(res.status).toBe(200);
+      for (const entry of res.body.schedule) {
+        expect(typeof entry.operation).toBe('string');
+        expect(typeof entry.baseline_resource_fee_stroops).toBe('number');
+        expect(entry.inclusion_fee_stroops).toBe(100);
+        expect(entry.total_fee_stroops).toBe(
+          entry.baseline_resource_fee_stroops + entry.inclusion_fee_stroops,
+        );
+        expect(entry.total_fee_xlm).toBeGreaterThan(0);
+        expect(entry.total_fee_usd).toBeGreaterThan(0);
+      }
+    });
+
+    it('includes entries for the primary Soroban operations', async () => {
+      const res = await request(app).get('/api/costs/fee-schedule');
+
+      const operations = res.body.schedule.map((e: { operation: string }) => e.operation);
+      expect(operations).toContain('issue_credential');
+      expect(operations).toContain('attest');
+      expect(operations).toContain('create_slice');
+      expect(operations).toContain('mint_sbt');
+      expect(operations).toContain('verify_groth16_proof');
     });
   });
 });

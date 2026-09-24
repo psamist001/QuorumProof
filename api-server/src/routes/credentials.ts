@@ -6,6 +6,8 @@ import { ShardedCredentialStore } from '../services/shardedStorage.js';
 import { SearchIndexStore } from '../services/searchIndexStore.js';
 import { SearchRebuildManager } from '../services/searchRebuildManager.js';
 import { parseFilterTree } from '../services/searchFilterParser.js';
+// #1563: Simple credential_type= / status= filter validation middleware
+import { credentialQueryFilterMiddleware } from '../middleware/credentialQueryFilter.js';
 
 export type SorobanClient = {
   simulateCall: typeof SimulateCallType;
@@ -136,7 +138,7 @@ export function createCredentialsRouter(soroban: SorobanClient) {
    *   - sort_order: asc|desc (default: desc for recency/reputation, else asc)
    *   - facets: comma-separated facet names (default: issuer,credential_type,status,issuer_type,jurisdiction)
    */
-  router.get('/search', async (req: Request, res: Response) => {
+  router.get('/search', credentialQueryFilterMiddleware, async (req: Request, res: Response) => {
     try {
       // Populate index on first search or if empty
       if (currentIndex.getIndexSize() === 0) {
